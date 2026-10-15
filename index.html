@@ -123,8 +123,8 @@
     </div>
 
     <script>
-        // Render server URL
-        const socket = io('https://phonelink-server.onrender.com');
+        // Automatic server connection
+        const socket = io();
         let peerConnection;
         const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
