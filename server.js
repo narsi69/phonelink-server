@@ -1,46 +1,125 @@
 const express = require('express');
 const http = require('http');
-const path = require('path');
 const { Server } = require('socket.io');
+const cors = require('cors');
 
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+app.use(cors());
 
-// Chrome Viewer webpage serve karein
+// Server health check route
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
+    res.send('PhoneLink Signaling Server is Active and Running.');
 });
 
-io.on('connection', (socket) => {
-    console.log('Device connected:', socket.id);
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
 
-    socket.on('join-room', (roomId) => {
-        socket.join(roomId);
-        console.log(`Socket ${socket.id} joined room: ${roomId}`);
-        socket.to(roomId).emit('peer-joined', socket.id);
+// Active rooms database in memory: { roomId: { hostSocketId, pin, viewerSocketId } }
+const activeRooms = {};
+
+io.on('connection', (socket) => {
+    console.log('Client connected:', socket.id);
+
+    // 1. Phone App (Host) Device ID aur Fixed PIN register karta hai
+    socket.on('register-host', (data) => {
+        const { roomId, pin } = data;
+        if (!roomId || !pin) {
+            console.log('Host registration failed: Missing roomId or pin');
+            return;
+        }
+
+        activeRooms[roomId] = {
+            hostSocketId: socket.id,
+            pin: String(pin).trim(),
+            viewerSocketId: null
+        };
+        socket.roomId = roomId;
+        console.log(`[Host Online] Device ID: ${roomId} | PIN: ${pin}`);
+        socket.emit('host-registered', { success: true, roomId: roomId });
     });
 
+    // 2. Browser (Viewer) ID aur PIN ke sath authenticate hota hai
+    socket.on('join-viewer', (data) => {
+        const { roomId, pin } = data;
+        const targetRoom = activeRooms[roomId];
+
+        if (!targetRoom) {
+            return socket.emit('auth-error', { 
+                message: 'Device offline hai ya Device ID galat hai.' 
+            });
+        }
+
+        if (targetRoom.pin !== String(pin).trim()) {
+            return socket.emit('auth-error', { 
+                message: 'Galat Security PIN! Connection reject kar diya gaya.' 
+            });
+        }
+
+        // Authentication Success -> Host aur Viewer pair karein
+        targetRoom.viewerSocketId = socket.id;
+        socket.roomId = roomId;
+        console.log(`[Access Granted] Viewer paired with Device ID: ${roomId}`);
+
+        socket.emit('auth-success', { roomId: roomId });
+        io.to(targetRoom.hostSocketId).emit('viewer-ready');
+    });
+
+    // 3. WebRTC Signaling Relays (Offer, Answer, ICE Candidates)
     socket.on('offer', (data) => {
-        console.log('--> Offer sent to room:', data.roomId);
-        socket.to(data.roomId).emit('offer', data.sdp);
+        const targetRoom = activeRooms[socket.roomId];
+        if (targetRoom && targetRoom.viewerSocketId) {
+            io.to(targetRoom.viewerSocketId).emit('offer', data);
+        }
     });
 
     socket.on('answer', (data) => {
-        console.log('<-- Answer sent to room:', data.roomId);
-        socket.to(data.roomId).emit('answer', data.sdp);
+        const targetRoom = activeRooms[socket.roomId];
+        if (targetRoom && targetRoom.hostSocketId) {
+            io.to(targetRoom.hostSocketId).emit('answer', data);
+        }
     });
 
     socket.on('ice-candidate', (data) => {
-        socket.to(data.roomId).emit('ice-candidate', data.candidate);
+        const targetRoom = activeRooms[socket.roomId];
+        if (!targetRoom) return;
+
+        const targetSocketId = (socket.id === targetRoom.hostSocketId) 
+            ? targetRoom.viewerSocketId 
+            : targetRoom.hostSocketId;
+
+        if (targetSocketId) {
+            io.to(targetSocketId).emit('ice-candidate', data);
+        }
     });
 
+    // 4. Remote touch gestures relay
+    socket.on('remote-gesture', (data) => {
+        const targetRoom = activeRooms[socket.roomId];
+        if (targetRoom && targetRoom.hostSocketId) {
+            io.to(targetRoom.hostSocketId).emit('remote-gesture', data);
+        }
+    });
+
+    // 5. Disconnect handling
     socket.on('disconnect', () => {
-        console.log('Device disconnected:', socket.id);
+        if (socket.roomId && activeRooms[socket.roomId]) {
+            if (activeRooms[socket.roomId].hostSocketId === socket.id) {
+                console.log(`[Host Terminated] Room closed: ${socket.roomId}`);
+                delete activeRooms[socket.roomId];
+            } else if (activeRooms[socket.roomId].viewerSocketId === socket.id) {
+                console.log(`[Viewer Disconnected] Room: ${socket.roomId}`);
+                activeRooms[socket.roomId].viewerSocketId = null;
+            }
+        }
     });
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Signaling server running on port ${PORT}`);
+const PORT = process.env.PORT || 10000;
+server.listen(PORT, () => {
+    console.log(`PhoneLink Signaling Server active on port ${PORT}`);
 });
