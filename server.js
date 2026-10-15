@@ -7,10 +7,9 @@ const path = require('path');
 const app = express();
 app.use(cors());
 
-// Static files serve karne ke liye
+// Static files serve karein
 app.use(express.static(__dirname));
 
-// Jab koi website khole toh index.html serve kare
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
@@ -23,7 +22,7 @@ const io = new Server(server, {
     }
 });
 
-// Active rooms database: { roomId: { hostSocketId, pin, viewerSocketId } }
+// Active sessions memory
 const activeRooms = {};
 
 io.on('connection', (socket) => {
@@ -31,9 +30,16 @@ io.on('connection', (socket) => {
 
     // 1. Phone App (Host) Device ID aur Fixed PIN register karta hai
     socket.on('register-host', (data) => {
-        const { roomId, pin } = data;
+        let payload = data;
+        if (typeof data === 'string') {
+            try { payload = JSON.parse(data); } catch (e) { payload = {}; }
+        }
+
+        const roomId = payload ? payload.roomId : null;
+        const pin = payload ? payload.pin : null;
+
         if (!roomId || !pin) {
-            console.log('Host registration failed: Missing roomId or pin');
+            console.log('Registration rejected: Missing roomId or pin', data);
             return;
         }
 
@@ -49,7 +55,13 @@ io.on('connection', (socket) => {
 
     // 2. Browser (Viewer) ID aur PIN ke sath authenticate hota hai
     socket.on('join-viewer', (data) => {
-        const { roomId, pin } = data;
+        let payload = data;
+        if (typeof data === 'string') {
+            try { payload = JSON.parse(data); } catch (e) { payload = {}; }
+        }
+
+        const roomId = payload ? payload.roomId : null;
+        const pin = payload ? payload.pin : null;
         const targetRoom = activeRooms[roomId];
 
         if (!targetRoom) {
@@ -64,7 +76,6 @@ io.on('connection', (socket) => {
             });
         }
 
-        // Authentication Success -> Host aur Viewer pair karein
         targetRoom.viewerSocketId = socket.id;
         socket.roomId = roomId;
         console.log(`[Access Granted] Viewer paired with Device ID: ${roomId}`);
@@ -73,7 +84,7 @@ io.on('connection', (socket) => {
         io.to(targetRoom.hostSocketId).emit('viewer-ready');
     });
 
-    // 3. WebRTC Signaling Relays (Offer, Answer, ICE Candidates)
+    // 3. WebRTC Signaling Relays
     socket.on('offer', (data) => {
         const targetRoom = activeRooms[socket.roomId];
         if (targetRoom && targetRoom.viewerSocketId) {
@@ -101,7 +112,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 4. Remote touch gestures relay
+    // 4. Remote touch gestures
     socket.on('remote-gesture', (data) => {
         const targetRoom = activeRooms[socket.roomId];
         if (targetRoom && targetRoom.hostSocketId) {
@@ -109,7 +120,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 5. Disconnect handling
+    // 5. Cleanup
     socket.on('disconnect', () => {
         if (socket.roomId && activeRooms[socket.roomId]) {
             if (activeRooms[socket.roomId].hostSocketId === socket.id) {
