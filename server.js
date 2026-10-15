@@ -2,13 +2,17 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const path = require('path');
 
 const app = express();
 app.use(cors());
 
-// Server health check route
+// Static files serve karne ke liye
+app.use(express.static(__dirname));
+
+// Jab koi website khole toh index.html serve kare
 app.get('/', (req, res) => {
-    res.send('PhoneLink Signaling Server is Active and Running.');
+    res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 const server = http.createServer(app);
@@ -19,7 +23,7 @@ const io = new Server(server, {
     }
 });
 
-// Active rooms database in memory: { roomId: { hostSocketId, pin, viewerSocketId } }
+// Active rooms database: { roomId: { hostSocketId, pin, viewerSocketId } }
 const activeRooms = {};
 
 io.on('connection', (socket) => {
@@ -56,7 +60,7 @@ io.on('connection', (socket) => {
 
         if (targetRoom.pin !== String(pin).trim()) {
             return socket.emit('auth-error', { 
-                message: 'Galat Security PIN! Connection reject kar diya gaya.' 
+                message: 'Galat Security PIN! Connection reject ho gaya.' 
             });
         }
 
