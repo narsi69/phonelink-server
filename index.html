@@ -3,219 +3,193 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PhoneLink Remote Web Viewer</title>
-    <script src="/socket.io/socket.io.js"></script>
+    <title>PhoneLink Remote Console</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        * {
+            box-sizing: border-box;
+            user-select: none;
+        }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #121212;
-            color: #fff;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .header {
-            margin-bottom: 15px;
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-        input {
-            padding: 8px 12px;
-            border-radius: 6px;
-            border: 1px solid #444;
-            background: #222;
-            color: #fff;
-            font-size: 16px;
-            width: 120px;
-            text-align: center;
-        }
-        button {
-            padding: 8px 18px;
-            background: #6200ee;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-size: 15px;
-            cursor: pointer;
-            font-weight: bold;
-        }
-        button:hover { background: #7c25f8; }
-        #status {
-            margin-bottom: 12px;
-            font-size: 14px;
-            color: #aaa;
-        }
-        .screen-container {
-            position: relative;
-            background: #000;
-            border: 2px solid #333;
-            border-radius: 14px;
-            overflow: hidden;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.7);
-            min-width: 300px;
-            min-height: 500px;
+            margin: 0;
+            background: radial-gradient(circle at center, #0B132B 0%, #070B19 100%);
+            color: #F8FAFC;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             display: flex;
             align-items: center;
             justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .login-card {
+            background: #0F182E;
+            padding: 36px 30px;
+            border-radius: 20px;
+            border: 1.5px solid #1E2C4B;
+            width: 340px;
+            text-align: center;
+            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+        }
+        .brand-title {
+            margin: 0 0 6px 0;
+            color: #00E5FF;
+            font-size: 22px;
+            letter-spacing: 1.5px;
+            font-weight: 800;
+        }
+        .brand-sub {
+            margin: 0 0 24px 0;
+            color: #8696B2;
+            font-size: 11px;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+        }
+        input {
+            width: 100%;
+            padding: 14px;
+            margin-bottom: 14px;
+            border-radius: 12px;
+            border: 1.5px solid #1E2C4B;
+            background: #070B19;
+            color: #00E5FF;
+            font-size: 16px;
+            text-align: center;
+            letter-spacing: 3px;
+            font-weight: bold;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+        input:focus {
+            border-color: #00E5FF;
+            box-shadow: 0 0 12px rgba(0, 229, 255, 0.2);
+        }
+        input::placeholder {
+            color: #475569;
+            letter-spacing: 1px;
+            font-size: 12px;
+            font-weight: normal;
+        }
+        button {
+            width: 100%;
+            padding: 14px;
+            background: #00E5FF;
+            color: #070B19;
+            border: none;
+            border-radius: 12px;
+            font-weight: 800;
+            font-size: 14px;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: transform 0.1s, opacity 0.2s;
+        }
+        button:hover { opacity: 0.9; }
+        button:active { transform: scale(0.98); }
+        #errorMsg {
+            color: #FF4D6D;
+            font-size: 12px;
+            margin-top: 14px;
+            min-height: 18px;
+            font-weight: 600;
+        }
+        #videoContainer {
+            display: none;
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            background: #000;
+            cursor: pointer;
         }
         video {
-            display: block;
-            max-height: 80vh;
-            width: auto;
-            cursor: crosshair;
+            width: 100%; height: 100%;
+            object-fit: contain;
         }
     </style>
 </head>
 <body>
 
-    <div class="header">
-        <label>Room ID:</label>
-        <input type="text" id="roomId" value="1234">
-        <button id="connectBtn" onclick="startViewing()">Connect & View Phone</button>
+    <div class="login-card" id="loginCard">
+        <div class="brand-title">PHONELINK</div>
+        <div class="brand-sub">Secure WebRTC Terminal</div>
+
+        <input type="text" id="inputRoomId" placeholder="6-DIGIT DEVICE ID" maxlength="6">
+        <input type="password" id="inputPin" placeholder="4-DIGIT PIN" maxlength="4">
+
+        <button onclick="authenticateSession()">CONNECT DEVICE</button>
+        <div id="errorMsg"></div>
     </div>
 
-    <div id="status">Status: Waiting to connect...</div>
-
-    <div class="screen-container">
-        <video id="remoteVideo" autoplay playsinline muted></video>
+    <div id="videoContainer">
+        <video id="remoteVideo" autoplay playsinline></video>
     </div>
 
     <script>
-        let socket;
-        let pc;
-        let dataChannel;
-        let roomId;
+        // Render server URL
+        const socket = io('https://phonelink-server.onrender.com');
+        let peerConnection;
+        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-        const statusEl = document.getElementById('status');
-        const videoEl = document.getElementById('remoteVideo');
+        function authenticateSession() {
+            const roomId = document.getElementById('inputRoomId').value.trim();
+            const pin = document.getElementById('inputPin').value.trim();
+            const errorBox = document.getElementById('errorMsg');
 
-        function updateStatus(text) {
-            statusEl.innerText = "Status: " + text;
-        }
-
-        async function startViewing() {
-            roomId = document.getElementById('roomId').value.trim();
-            if (!roomId) return alert("Room ID enter karein");
-
-            document.getElementById('connectBtn').disabled = true;
-            updateStatus("Connecting to server...");
-
-            if (pc) {
-                pc.close();
-                pc = null;
+            if (roomId.length < 6 || pin.length < 4) {
+                errorBox.style.color = "#FF4D6D";
+                errorBox.innerText = "Device ID (6 digit) aur PIN (4 digit) enter karein.";
+                return;
             }
 
-            if (!socket) {
-                socket = io();
+            errorBox.style.color = "#00E5FF";
+            errorBox.innerText = "Authenticating credentials...";
 
-                socket.on('connect', () => {
-                    updateStatus("Connected to server! Joining room: " + roomId);
-                    socket.emit('join-room', roomId);
-                    initWebRTC();
-                });
-
-                // FIX: Check if state is have-local-offer before setting remote description
-                socket.on('answer', async (sdp) => {
-                    if (pc && pc.signalingState === 'have-local-offer') {
-                        try {
-                            await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: sdp }));
-                            updateStatus("Answer accepted, live stream active!");
-                        } catch (err) {
-                            console.error("setRemoteDescription error:", err);
-                        }
-                    } else {
-                        console.warn("Ignored duplicate answer in state:", pc ? pc.signalingState : 'null');
-                    }
-                });
-
-                socket.on('ice-candidate', async (candidate) => {
-                    try {
-                        if (pc && pc.remoteDescription && pc.remoteDescription.type) {
-                            await pc.addIceCandidate(new RTCIceCandidate(candidate));
-                        }
-                    } catch (e) {
-                        console.error("ICE Candidate Error:", e);
-                    }
-                });
-            } else {
-                socket.emit('join-room', roomId);
-                initWebRTC();
-            }
+            socket.emit('join-viewer', { roomId, pin });
         }
 
-        async function initWebRTC() {
-            pc = new RTCPeerConnection({
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        socket.on('auth-error', (data) => {
+            const errorBox = document.getElementById('errorMsg');
+            errorBox.style.color = "#FF4D6D";
+            errorBox.innerText = data.message;
+        });
+
+        socket.on('auth-success', () => {
+            document.getElementById('loginCard').style.display = 'none';
+            document.getElementById('videoContainer').style.display = 'block';
+            setupWebRTC();
+        });
+
+        function setupWebRTC() {
+            peerConnection = new RTCPeerConnection(config);
+
+            peerConnection.ontrack = (event) => {
+                document.getElementById('remoteVideo').srcObject = event.streams[0];
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', event.candidate);
+                }
+            };
+
+            socket.on('offer', async (offer) => {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                socket.emit('answer', answer);
             });
 
-            pc.addTransceiver('video', { direction: 'recvonly' });
+            socket.on('ice-candidate', (candidate) => {
+                peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            });
 
-            dataChannel = pc.createDataChannel('control_channel');
-            dataChannel.onopen = () => updateStatus("Connected! Live streaming & control active.");
-
-            pc.onicecandidate = (event) => {
-                if (event.candidate) {
-                    socket.emit('ice-candidate', {
-                        roomId: roomId,
-                        candidate: {
-                            sdpMid: event.candidate.sdpMid,
-                            sdpMLineIndex: event.candidate.sdpMLineIndex,
-                            candidate: event.candidate.candidate
-                        }
-                    });
-                }
-            };
-
-            pc.ontrack = (event) => {
-                if (videoEl.srcObject !== event.streams[0]) {
-                    videoEl.srcObject = event.streams[0];
-                    videoEl.play().catch(e => console.log("Autoplay error:", e));
-                    updateStatus("Stream active! Phone screen live.");
-                }
-            };
-
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            socket.emit('offer', { roomId: roomId, sdp: offer.sdp });
-            updateStatus("Offer sent. Waiting for phone answer...");
+            // Remote click forwarding
+            const video = document.getElementById('remoteVideo');
+            video.addEventListener('click', (e) => {
+                const rect = video.getBoundingClientRect();
+                const x = (e.clientX - rect.left) / rect.width;
+                const y = (e.clientY - rect.top) / rect.height;
+                socket.emit('remote-gesture', { type: 'TAP', x, y });
+            });
         }
-
-        // --- Touch Simulation ---
-        let startX = 0, startY = 0, startTime = 0;
-
-        videoEl.addEventListener('mousedown', (e) => {
-            const rect = videoEl.getBoundingClientRect();
-            startX = (e.clientX - rect.left) / rect.width;
-            startY = (e.clientY - rect.top) / rect.height;
-            startTime = Date.now();
-        });
-
-        videoEl.addEventListener('mouseup', (e) => {
-            const rect = videoEl.getBoundingClientRect();
-            const endX = (e.clientX - rect.left) / rect.width;
-            const endY = (e.clientY - rect.top) / rect.height;
-            const duration = Date.now() - startTime;
-            const dist = Math.hypot(endX - startX, endY - startY);
-
-            if (!dataChannel || dataChannel.readyState !== 'open') return;
-
-            if (dist < 0.03) {
-                dataChannel.send(JSON.stringify({ type: 'tap', x: endX, y: endY }));
-            } else {
-                dataChannel.send(JSON.stringify({
-                    type: 'swipe',
-                    x1: startX,
-                    y1: startY,
-                    x2: endX,
-                    y2: endY,
-                    duration: duration
-                }));
-            }
-        });
     </script>
 </body>
 </html>
