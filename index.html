@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhoneLink Remote Web Viewer</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #121212;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .header {
+            margin-bottom: 15px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        input {
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background: #222;
+            color: #fff;
+            font-size: 16px;
+            width: 120px;
+            text-align: center;
+        }
+        button {
+            padding: 8px 18px;
+            background: #6200ee;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 15px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover { background: #7c25f8; }
+        #status {
+            margin-bottom: 12px;
+            font-size: 14px;
+            color: #aaa;
+        }
+        .screen-container {
+            position: relative;
+            background: #000;
+            border: 2px solid #333;
+            border-radius: 14px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+        }
+        video {
+            display: block;
+            max-height: 82vh;
+            width: auto;
+            cursor: crosshair;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <label>Room ID:</label>
+        <input type="text" id="roomId" value="1234">
+        <button id="connectBtn" onclick="startViewing()">Connect & View Phone</button>
+    </div>
+
+    <div id="status">Status: Waiting to connect...</div>
+
+    <div class="screen-container">
+        <video id="remoteVideo" autoplay playsinline></video>
+    </div>
+
+    <script>
+        let socket;
+        let pc;
+        let dataChannel;
+        let roomId;
+
+        const statusEl = document.getElementById('status');
+        const videoEl = document.getElementById('remoteVideo');
+
+        function updateStatus(text) {
+            statusEl.innerText = "Status: " + text;
+        }
+
+        async function startViewing() {
+            roomId = document.getElementById('roomId').value.trim();
+            if (!roomId) return alert("Room ID enter karein");
+
+            document.getElementById('connectBtn').disabled = true;
+            updateStatus("Connecting to server...");
+
+            socket = io();
+
+            socket.on('connect', () => {
+                updateStatus("Connected to server! Joining room: " + roomId);
+                socket.emit('join-room', roomId);
+                initWebRTC();
+            });
+
+            socket.on('answer', async (sdp) => {
+                updateStatus("Answer received, establishing stream...");
+                await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: sdp }));
+            });
+
+            socket.on('ice-candidate', async (candidate) => {
+                try {
+                    await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                } catch (e) {
+                    console.error("ICE Candidate Error:", e);
+                }
+            });
+        }
+
+        async function initWebRTC() {
+            pc = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+
+            // Transceiver to receive video from phone
+            pc.addTransceiver('video', { direction: 'recvonly' });
+
+            // Create DataChannel for mouse click/swipe
+            dataChannel = pc.createDataChannel('control_channel');
+            dataChannel.onopen = () => updateStatus("Connected! Live streaming & control active.");
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', {
+                        roomId: roomId,
+                        candidate: {
+                            sdpMid: event.candidate.sdpMid,
+                            sdpMLineIndex: event.candidate.sdpMLineIndex,
+                            candidate: event.candidate.candidate
+                        }
+                    });
+                }
+            };
+
+            pc.ontrack = (event) => {
+                if (videoEl.srcObject !== event.streams[0]) {
+                    videoEl.srcObject = event.streams[0];
+                    updateStatus("Stream active! Phone screen live.");
+                }
+            };
+
+            // Generate Offer
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socket.emit('offer', { roomId: roomId, sdp: offer.sdp });
+            updateStatus("Offer sent. Waiting for phone answer...");
+        }
+
+        // --- Mouse Control to Phone Touch Simulation ---
+        let startX = 0, startY = 0, startTime = 0;
+
+        videoEl.addEventListener('mousedown', (e) => {
+            const rect = videoEl.getBoundingClientRect();
+            startX = (e.clientX - rect.left) / rect.width;
+            startY = (e.clientY - rect.top) / rect.height;
+            startTime = Date.now();
+        });
+
+        videoEl.addEventListener('mouseup', (e) => {
+            const rect = videoEl.getBoundingClientRect();
+            const endX = (e.clientX - rect.left) / rect.width;
+            const endY = (e.clientY - rect.top) / rect.height;
+            const duration = Date.now() - startTime;
+            const dist = Math.hypot(endX - startX, endY - startY);
+
+            if (!dataChannel || dataChannel.readyState !== 'open') return;
+
+            if (dist < 0.03) {
+                // Single Tap
+                dataChannel.send(JSON.stringify({
+                    type: 'tap',
+                    x: endX,
+                    y: endY
+                }));
+            } else {
+                // Swipe / Scroll
+                dataChannel.send(JSON.stringify({
+                    type: 'swipe',
+                    x1: startX,
+                    y1: startY,
+                    x2: endX,
+                    y2: endY,
+                    duration: duration
+                }));
+            }
+        });
+    </script>
+</body>
+</html>
