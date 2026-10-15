@@ -56,10 +56,15 @@
             border-radius: 14px;
             overflow: hidden;
             box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+            min-width: 300px;
+            min-height: 500px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
         video {
             display: block;
-            max-height: 82vh;
+            max-height: 80vh;
             width: auto;
             cursor: crosshair;
         }
@@ -76,7 +81,7 @@
     <div id="status">Status: Waiting to connect...</div>
 
     <div class="screen-container">
-        <video id="remoteVideo" autoplay playsinline></video>
+        <video id="remoteVideo" autoplay playsinline muted></video>
     </div>
 
     <script>
@@ -99,26 +104,47 @@
             document.getElementById('connectBtn').disabled = true;
             updateStatus("Connecting to server...");
 
-            socket = io();
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
 
-            socket.on('connect', () => {
-                updateStatus("Connected to server! Joining room: " + roomId);
+            if (!socket) {
+                socket = io();
+
+                socket.on('connect', () => {
+                    updateStatus("Connected to server! Joining room: " + roomId);
+                    socket.emit('join-room', roomId);
+                    initWebRTC();
+                });
+
+                // FIX: Check if state is have-local-offer before setting remote description
+                socket.on('answer', async (sdp) => {
+                    if (pc && pc.signalingState === 'have-local-offer') {
+                        try {
+                            await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: sdp }));
+                            updateStatus("Answer accepted, live stream active!");
+                        } catch (err) {
+                            console.error("setRemoteDescription error:", err);
+                        }
+                    } else {
+                        console.warn("Ignored duplicate answer in state:", pc ? pc.signalingState : 'null');
+                    }
+                });
+
+                socket.on('ice-candidate', async (candidate) => {
+                    try {
+                        if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+                            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                        }
+                    } catch (e) {
+                        console.error("ICE Candidate Error:", e);
+                    }
+                });
+            } else {
                 socket.emit('join-room', roomId);
                 initWebRTC();
-            });
-
-            socket.on('answer', async (sdp) => {
-                updateStatus("Answer received, establishing stream...");
-                await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: sdp }));
-            });
-
-            socket.on('ice-candidate', async (candidate) => {
-                try {
-                    await pc.addIceCandidate(new RTCIceCandidate(candidate));
-                } catch (e) {
-                    console.error("ICE Candidate Error:", e);
-                }
-            });
+            }
         }
 
         async function initWebRTC() {
@@ -126,10 +152,8 @@
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
             });
 
-            // Transceiver to receive video from phone
             pc.addTransceiver('video', { direction: 'recvonly' });
 
-            // Create DataChannel for mouse click/swipe
             dataChannel = pc.createDataChannel('control_channel');
             dataChannel.onopen = () => updateStatus("Connected! Live streaming & control active.");
 
@@ -149,18 +173,18 @@
             pc.ontrack = (event) => {
                 if (videoEl.srcObject !== event.streams[0]) {
                     videoEl.srcObject = event.streams[0];
+                    videoEl.play().catch(e => console.log("Autoplay error:", e));
                     updateStatus("Stream active! Phone screen live.");
                 }
             };
 
-            // Generate Offer
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             socket.emit('offer', { roomId: roomId, sdp: offer.sdp });
             updateStatus("Offer sent. Waiting for phone answer...");
         }
 
-        // --- Mouse Control to Phone Touch Simulation ---
+        // --- Touch Simulation ---
         let startX = 0, startY = 0, startTime = 0;
 
         videoEl.addEventListener('mousedown', (e) => {
@@ -180,14 +204,8 @@
             if (!dataChannel || dataChannel.readyState !== 'open') return;
 
             if (dist < 0.03) {
-                // Single Tap
-                dataChannel.send(JSON.stringify({
-                    type: 'tap',
-                    x: endX,
-                    y: endY
-                }));
+                dataChannel.send(JSON.stringify({ type: 'tap', x: endX, y: endY }));
             } else {
-                // Swipe / Scroll
                 dataChannel.send(JSON.stringify({
                     type: 'swipe',
                     x1: startX,
