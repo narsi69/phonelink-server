@@ -3,193 +3,193 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PhoneLink Remote Console</title>
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <title>Phonelink Remote Viewer</title>
+    <script src="/socket.io/socket.io.js"></script>
     <style>
-        * {
-            box-sizing: border-box;
-            user-select: none;
-        }
         body {
             margin: 0;
-            background: radial-gradient(circle at center, #0B132B 0%, #070B19 100%);
-            color: #F8FAFC;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #070B19;
+            color: #fff;
+            font-family: sans-serif;
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
             height: 100vh;
-            overflow: hidden;
         }
-        .login-card {
-            background: #0F182E;
-            padding: 36px 30px;
-            border-radius: 20px;
-            border: 1.5px solid #1E2C4B;
-            width: 340px;
+        #login-container {
+            background: #0D1527;
+            padding: 30px;
+            border-radius: 16px;
+            border: 1px solid #1E2C4B;
             text-align: center;
-            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
-        }
-        .brand-title {
-            margin: 0 0 6px 0;
-            color: #00E5FF;
-            font-size: 22px;
-            letter-spacing: 1.5px;
-            font-weight: 800;
-        }
-        .brand-sub {
-            margin: 0 0 24px 0;
-            color: #8696B2;
-            font-size: 11px;
-            letter-spacing: 0.8px;
-            text-transform: uppercase;
+            width: 300px;
         }
         input {
             width: 100%;
-            padding: 14px;
-            margin-bottom: 14px;
-            border-radius: 12px;
-            border: 1.5px solid #1E2C4B;
-            background: #070B19;
-            color: #00E5FF;
+            padding: 12px;
+            margin: 10px 0;
+            background: #121D33;
+            border: 1px solid #00E5FF;
+            color: #fff;
+            border-radius: 8px;
+            box-sizing: border-box;
             font-size: 16px;
-            text-align: center;
-            letter-spacing: 3px;
-            font-weight: bold;
-            outline: none;
-            transition: all 0.2s ease;
-        }
-        input:focus {
-            border-color: #00E5FF;
-            box-shadow: 0 0 12px rgba(0, 229, 255, 0.2);
-        }
-        input::placeholder {
-            color: #475569;
-            letter-spacing: 1px;
-            font-size: 12px;
-            font-weight: normal;
         }
         button {
             width: 100%;
-            padding: 14px;
+            padding: 12px;
             background: #00E5FF;
             color: #070B19;
             border: none;
-            border-radius: 12px;
-            font-weight: 800;
-            font-size: 14px;
-            letter-spacing: 1px;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 16px;
             cursor: pointer;
-            transition: transform 0.1s, opacity 0.2s;
+            margin-top: 10px;
         }
-        button:hover { opacity: 0.9; }
-        button:active { transform: scale(0.98); }
-        #errorMsg {
-            color: #FF4D6D;
-            font-size: 12px;
-            margin-top: 14px;
-            min-height: 18px;
-            font-weight: 600;
-        }
-        #videoContainer {
+        #video-container {
             display: none;
-            position: absolute;
-            top: 0; left: 0;
-            width: 100vw; height: 100vh;
+            width: 100%;
+            height: 100vh;
+            position: relative;
             background: #000;
-            cursor: pointer;
         }
         video {
-            width: 100%; height: 100%;
+            width: 100%;
+            height: 100%;
             object-fit: contain;
+        }
+        #status {
+            margin-top: 10px;
+            color: #00F59B;
+            font-size: 14px;
         }
     </style>
 </head>
 <body>
 
-    <div class="login-card" id="loginCard">
-        <div class="brand-title">PHONELINK</div>
-        <div class="brand-sub">Secure WebRTC Terminal</div>
-
-        <input type="text" id="inputRoomId" placeholder="6-DIGIT DEVICE ID" maxlength="6">
-        <input type="password" id="inputPin" placeholder="4-DIGIT PIN" maxlength="4">
-
-        <button onclick="authenticateSession()">CONNECT DEVICE</button>
-        <div id="errorMsg"></div>
+    <div id="login-container">
+        <h2>Phonelink Viewer</h2>
+        <input type="text" id="roomIdInput" placeholder="Enter Device ID (Room ID)">
+        <input type="password" id="pinInput" placeholder="Enter Security PIN">
+        <button id="connectBtn">Connect to Phone</button>
+        <div id="status"></div>
     </div>
 
-    <div id="videoContainer">
+    <div id="video-container">
         <video id="remoteVideo" autoplay playsinline></video>
     </div>
 
     <script>
-        // Automatic server connection
         const socket = io();
-        let peerConnection;
-        const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        let pc = null;
 
-        function authenticateSession() {
-            const roomId = document.getElementById('inputRoomId').value.trim();
-            const pin = document.getElementById('inputPin').value.trim();
-            const errorBox = document.getElementById('errorMsg');
+        const loginContainer = document.getElementById('login-container');
+        const videoContainer = document.getElementById('video-container');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const connectBtn = document.getElementById('connectBtn');
+        const statusDiv = document.getElementById('status');
 
-            if (roomId.length < 6 || pin.length < 4) {
-                errorBox.style.color = "#FF4D6D";
-                errorBox.innerText = "Device ID (6 digit) aur PIN (4 digit) enter karein.";
+        const rtcConfig = {
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        };
+
+        connectBtn.onclick = () => {
+            const roomId = document.getElementById('roomIdInput').value.trim();
+            const pin = document.getElementById('pinInput').value.trim();
+
+            if (!roomId || !pin) {
+                statusDiv.innerText = "Please enter both Room ID and PIN";
+                statusDiv.style.color = "#FF5252";
                 return;
             }
 
-            errorBox.style.color = "#00E5FF";
-            errorBox.innerText = "Authenticating credentials...";
+            statusDiv.innerText = "Connecting...";
+            statusDiv.style.color = "#00E5FF";
 
-            socket.emit('join-viewer', { roomId, pin });
-        }
+            socket.emit('join-room', { roomId, pin });
+        };
 
-        socket.on('auth-error', (data) => {
-            const errorBox = document.getElementById('errorMsg');
-            errorBox.style.color = "#FF4D6D";
-            errorBox.innerText = data.message;
+        socket.on('error-msg', (msg) => {
+            statusDiv.innerText = msg;
+            statusDiv.style.color = "#FF5252";
         });
 
-        socket.on('auth-success', () => {
-            document.getElementById('loginCard').style.display = 'none';
-            document.getElementById('videoContainer').style.display = 'block';
-            setupWebRTC();
+        socket.on('joined-success', () => {
+            statusDiv.innerText = "Authenticated! Waiting for stream...";
         });
 
-        function setupWebRTC() {
-            peerConnection = new RTCPeerConnection(config);
+        socket.on('offer', async (offer) => {
+            loginContainer.style.display = 'none';
+            videoContainer.style.display = 'block';
 
-            peerConnection.ontrack = (event) => {
-                document.getElementById('remoteVideo').srcObject = event.streams[0];
-            };
+            pc = new RTCPeerConnection(rtcConfig);
 
-            peerConnection.onicecandidate = (event) => {
+            pc.onicecandidate = (event) => {
                 if (event.candidate) {
                     socket.emit('ice-candidate', event.candidate);
                 }
             };
 
-            socket.on('offer', async (offer) => {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-                socket.emit('answer', answer);
-            });
+            pc.ontrack = (event) => {
+                remoteVideo.srcObject = event.streams[0];
+            };
 
-            socket.on('ice-candidate', (candidate) => {
-                peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-            });
+            await pc.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
 
-            // Remote click forwarding
-            const video = document.getElementById('remoteVideo');
-            video.addEventListener('click', (e) => {
-                const rect = video.getBoundingClientRect();
-                const x = (e.clientX - rect.left) / rect.width;
-                const y = (e.clientY - rect.top) / rect.height;
-                socket.emit('remote-gesture', { type: 'TAP', x, y });
-            });
-        }
+            socket.emit('answer', answer);
+        });
+
+        socket.on('ice-candidate', async (candidate) => {
+            if (pc) {
+                try {
+                    await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                } catch (e) {
+                    console.error('Error adding received ice candidate', e);
+                }
+            }
+        });
+
+        // Touch / Gesture handling on video stream to send to host
+        let downX = 0, downY = 0, downTime = 0;
+
+        remoteVideo.addEventListener('pointerdown', (e) => {
+            const rect = remoteVideo.getBoundingClientRect();
+            downX = e.clientX - rect.left;
+            downY = e.clientY - rect.top;
+            downTime = Date.now();
+        });
+
+        remoteVideo.addEventListener('pointerup', (e) => {
+            const rect = remoteVideo.getBoundingClientRect();
+            const upX = e.clientX - rect.left;
+            const upY = e.clientY - rect.top;
+            const duration = Date.now() - downTime;
+            const distance = Math.hypot(upX - downX, upY - downY);
+
+            const width = remoteVideo.clientWidth;
+            const height = remoteVideo.clientHeight;
+
+            if (distance < 25) {
+                socket.emit('remote-gesture', {
+                    type: 'tap',
+                    x: upX / width,
+                    y: upY / height
+                });
+            } else {
+                socket.emit('remote-gesture', {
+                    type: 'swipe',
+                    x1: downX / width,
+                    y1: downY / height,
+                    x2: upX / width,
+                    y2: upY / height,
+                    duration: duration
+                });
+            }
+        });
     </script>
 </body>
 </html>
