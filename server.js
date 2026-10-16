@@ -48,7 +48,7 @@ io.on('connection', (socket) => {
         socket.emit('host-registered', { success: true, roomId });
     });
 
-    // Viewer joining (from Android Controller app or Web Viewer) and authenticating with PIN
+    // Viewer joining and authenticating with PIN
     socket.on('join-room', (data) => {
         const { roomId, pin } = data;
         const room = rooms[roomId];
@@ -82,7 +82,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // WebRTC Answer from Viewer (Android Controller or Web)
+    // WebRTC Answer from Viewer
     socket.on('answer', (answer) => {
         const roomId = getRoomIdBySocket(socket.id);
         if (roomId && rooms[roomId] && rooms[roomId].hostSocketId) {
@@ -104,11 +104,23 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Remote Gestures (Tap/Swipe) from Viewer to Android Host app
+    // Remote Gestures (Tap/Swipe) from Viewer
     socket.on('remote-gesture', (gestureData) => {
         const roomId = getRoomIdBySocket(socket.id);
         if (roomId && rooms[roomId] && rooms[roomId].hostSocketId) {
             io.to(rooms[roomId].hostSocketId).emit('remote-gesture', gestureData);
+        }
+    });
+
+    // Remote Actions (Back, Home, Recents, Notifications) from Web Viewer
+    socket.on('remote_action', (data) => {
+        const roomId = data.roomId || getRoomIdBySocket(socket.id);
+        if (roomId && rooms[roomId] && rooms[roomId].hostSocketId) {
+            io.to(rooms[roomId].hostSocketId).emit('remote-gesture', {
+                type: 'global_action',
+                action: data.action
+            });
+            console.log(`Global action (${data.action}) relayed to host in room ${roomId}`);
         }
     });
 
