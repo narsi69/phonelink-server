@@ -17,5 +17,5 @@ The Application utilizes Android's screen capture mechanism exclusively to encod
 - **Transient Signaling:** All signaling data routed via the relay server is transient and strictly used to establish peer-to-peer (P2P) connections.
 
 ### 4. Contact
-For any queries or concerns regarding this privacy policy, please contact the developer via Gmail
+For any queries or concerns regarding this privacy policy, please contact the developer via 
 Gmail:- narsivaishnav11@gmail.com
