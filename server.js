@@ -22,7 +22,7 @@ const rooms = {};
 io.on('connection', (socket) => {
     console.log(`Client connected: ${socket.id}`);
 
-    // Host registration
+    // Host registration from Android Host app
     socket.on('register-host', (data) => {
         const { roomId, pin } = data;
         if (!roomId || !pin) return;
@@ -37,7 +37,7 @@ io.on('connection', (socket) => {
         socket.emit('host-registered', { success: true, roomId });
     });
 
-    // Viewer joining and authenticating with PIN
+    // Viewer joining (from Android Controller app or Web Viewer) and authenticating with PIN
     socket.on('join-room', (data) => {
         const { roomId, pin } = data;
         const room = rooms[roomId];
@@ -58,11 +58,11 @@ io.on('connection', (socket) => {
         
         socket.emit('joined-success');
         
-        // Notify host that viewer is ready
+        // Notify Android Host app that viewer is ready to generate WebRTC Offer
         io.to(room.hostSocketId).emit('viewer-ready');
     });
 
-    // WebRTC Offer from Host
+    // WebRTC Offer from Android Host app
     socket.on('offer', (offer) => {
         const roomId = getRoomIdBySocket(socket.id);
         if (roomId && rooms[roomId] && rooms[roomId].viewerSocketId) {
@@ -71,7 +71,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // WebRTC Answer from Viewer
+    // WebRTC Answer from Viewer (Android Controller or Web)
     socket.on('answer', (answer) => {
         const roomId = getRoomIdBySocket(socket.id);
         if (roomId && rooms[roomId] && rooms[roomId].hostSocketId) {
@@ -80,7 +80,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // ICE Candidates
+    // ICE Candidates relay between Host and Viewer
     socket.on('ice-candidate', (candidate) => {
         const roomId = getRoomIdBySocket(socket.id);
         if (!roomId || !rooms[roomId]) return;
@@ -93,7 +93,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Remote Gestures from Viewer to Host
+    // Remote Gestures (Tap/Swipe) from Viewer to Android Host app
     socket.on('remote-gesture', (gestureData) => {
         const roomId = getRoomIdBySocket(socket.id);
         if (roomId && rooms[roomId] && rooms[roomId].hostSocketId) {
