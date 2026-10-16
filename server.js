@@ -11,6 +11,17 @@ const io = new Server(server, {
     }
 });
 
+// 🔒 Secret Token Authentication Middleware (Security Update)
+io.use((socket, next) => {
+    const token = socket.handshake.auth.token || socket.handshake.query.token;
+    if (token === "PHONELINK_SECURE_SECRET_TOKEN_2026") {
+        next();
+    } else {
+        console.log(`Blocked unauthorized connection from IP: ${socket.handshake.address}`);
+        next(new Error("Authentication error: Invalid Secret Token"));
+    }
+});
+
 app.use(express.static('public'));
 app.get('/', (req, res) => {
     res.sendFile(__dirname + '/index.html');
