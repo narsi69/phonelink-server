@@ -82,7 +82,9 @@
     </div>
 
     <script>
-        const socket = io();
+        const socket = io({
+            auth: { token: "PHONELINK_SECURE_SECRET_TOKEN_2026" }
+        });
         let pc = null;
 
         const loginContainer = document.getElementById('login-container');
