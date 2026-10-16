@@ -11,7 +11,7 @@ const io = new Server(server, {
     }
 });
 
-// 🔒 Secret Token Authentication Middleware (Security Update)
+// 🔒 Secret Token Authentication Middleware
 io.use((socket, next) => {
     const token = socket.handshake.auth.token || socket.handshake.query.token;
     if (token === "PHONELINK_SECURE_SECRET_TOKEN_2026") {
