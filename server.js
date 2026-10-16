@@ -7,7 +7,7 @@ const path = require('path');
 const app = express();
 app.use(cors());
 
-// Static files serve karein
+// Serve static frontend files (index.html)
 app.use(express.static(__dirname));
 
 app.get('/', (req, res) => {
@@ -22,11 +22,11 @@ const io = new Server(server, {
     }
 });
 
-// Active sessions memory
+// Active sessions memory: { roomId: { hostSocketId, pin, viewerSocketId } }
 const activeRooms = {};
 
 io.on('connection', (socket) => {
-    console.log('Client connected:', socket.id);
+    console.log(`[Socket Connected] ID: ${socket.id}`);
 
     // 1. Phone App (Host) Device ID aur Fixed PIN register karta hai
     socket.on('register-host', (data) => {
@@ -39,7 +39,7 @@ io.on('connection', (socket) => {
         const pin = payload ? payload.pin : null;
 
         if (!roomId || !pin) {
-            console.log('Registration rejected: Missing roomId or pin', data);
+            console.log(`[Host Registration Rejected] Missing roomId or pin. Received:`, data);
             return;
         }
 
@@ -49,7 +49,11 @@ io.on('connection', (socket) => {
             viewerSocketId: null
         };
         socket.roomId = roomId;
+
+        console.log(`=========================================`);
         console.log(`[Host Online] Device ID: ${roomId} | PIN: ${pin}`);
+        console.log(`=========================================`);
+
         socket.emit('host-registered', { success: true, roomId: roomId });
     });
 
@@ -65,12 +69,14 @@ io.on('connection', (socket) => {
         const targetRoom = activeRooms[roomId];
 
         if (!targetRoom) {
+            console.log(`[Viewer Failed] Room ${roomId} is offline`);
             return socket.emit('auth-error', { 
-                message: 'Device offline hai ya Device ID galat hai.' 
+                message: 'Device offline hai ya galat Device ID hai.' 
             });
         }
 
         if (targetRoom.pin !== String(pin).trim()) {
+            console.log(`[Viewer Failed] Room ${roomId} PIN mismatch. Sent: ${pin}, Expected: ${targetRoom.pin}`);
             return socket.emit('auth-error', { 
                 message: 'Galat Security PIN! Connection reject ho gaya.' 
             });
@@ -78,7 +84,8 @@ io.on('connection', (socket) => {
 
         targetRoom.viewerSocketId = socket.id;
         socket.roomId = roomId;
-        console.log(`[Access Granted] Viewer paired with Device ID: ${roomId}`);
+
+        console.log(`[Access Granted] Viewer ${socket.id} paired with Host ${roomId}`);
 
         socket.emit('auth-success', { roomId: roomId });
         io.to(targetRoom.hostSocketId).emit('viewer-ready');
