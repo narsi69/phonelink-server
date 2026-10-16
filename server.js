@@ -1,19 +1,8 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const cors = require('cors');
-const path = require('path');
 
 const app = express();
-app.use(cors());
-
-// Serve static frontend files (index.html)
-app.use(express.static(__dirname));
-
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
-});
-
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
@@ -22,126 +11,124 @@ const io = new Server(server, {
     }
 });
 
-// Active sessions memory: { roomId: { hostSocketId, pin, viewerSocketId } }
-const activeRooms = {};
+app.use(express.static('public'));
+app.get('/', (req, res) => {
+    res.sendFile(__dirname + '/index.html');
+});
+
+// Rooms storage: roomId -> { hostSocketId, pin, viewerSocketId }
+const rooms = {};
 
 io.on('connection', (socket) => {
-    console.log(`[Socket Connected] ID: ${socket.id}`);
+    console.log(`Client connected: ${socket.id}`);
 
-    // 1. Phone App (Host) Device ID aur Fixed PIN register karta hai
+    // Host registration
     socket.on('register-host', (data) => {
-        let payload = data;
-        if (typeof data === 'string') {
-            try { payload = JSON.parse(data); } catch (e) { payload = {}; }
-        }
+        const { roomId, pin } = data;
+        if (!roomId || !pin) return;
 
-        const roomId = payload ? payload.roomId : null;
-        const pin = payload ? payload.pin : null;
+        rooms[roomId] = {
+            hostSocketId: socket.id,
+            pin: pin,
+            viewerSocketId: null
+        };
+        socket.join(roomId);
+        console.log(`Host registered for Room ID: ${roomId} with PIN: ${pin}`);
+        socket.emit('host-registered', { success: true, roomId });
+    });
 
-        if (!roomId || !pin) {
-            console.log(`[Host Registration Rejected] Missing roomId or pin. Received:`, data);
+    // Viewer joining and authenticating with PIN
+    socket.on('join-room', (data) => {
+        const { roomId, pin } = data;
+        const room = rooms[roomId];
+
+        if (!room) {
+            socket.emit('error-msg', 'Room not found or host is offline.');
             return;
         }
 
-        activeRooms[roomId] = {
-            hostSocketId: socket.id,
-            pin: String(pin).trim(),
-            viewerSocketId: null
-        };
-        socket.roomId = roomId;
+        if (room.pin !== pin) {
+            socket.emit('error-msg', 'Invalid Security PIN.');
+            return;
+        }
 
-        console.log(`=========================================`);
-        console.log(`[Host Online] Device ID: ${roomId} | PIN: ${pin}`);
-        console.log(`=========================================`);
-
-        socket.emit('host-registered', { success: true, roomId: roomId });
+        room.viewerSocketId = socket.id;
+        socket.join(roomId);
+        console.log(`Viewer authenticated for Room ID: ${roomId}`);
+        
+        socket.emit('joined-success');
+        
+        // Notify host that viewer is ready
+        io.to(room.hostSocketId).emit('viewer-ready');
     });
 
-    // 2. Browser (Viewer) ID aur PIN ke sath authenticate hota hai
-    socket.on('join-viewer', (data) => {
-        let payload = data;
-        if (typeof data === 'string') {
-            try { payload = JSON.parse(data); } catch (e) { payload = {}; }
-        }
-
-        const roomId = payload ? payload.roomId : null;
-        const pin = payload ? payload.pin : null;
-        const targetRoom = activeRooms[roomId];
-
-        if (!targetRoom) {
-            console.log(`[Viewer Failed] Room ${roomId} is offline`);
-            return socket.emit('auth-error', { 
-                message: 'Device offline hai ya galat Device ID hai.' 
-            });
-        }
-
-        if (targetRoom.pin !== String(pin).trim()) {
-            console.log(`[Viewer Failed] Room ${roomId} PIN mismatch. Sent: ${pin}, Expected: ${targetRoom.pin}`);
-            return socket.emit('auth-error', { 
-                message: 'Galat Security PIN! Connection reject ho gaya.' 
-            });
-        }
-
-        targetRoom.viewerSocketId = socket.id;
-        socket.roomId = roomId;
-
-        console.log(`[Access Granted] Viewer ${socket.id} paired with Host ${roomId}`);
-
-        socket.emit('auth-success', { roomId: roomId });
-        io.to(targetRoom.hostSocketId).emit('viewer-ready');
-    });
-
-    // 3. WebRTC Signaling Relays
-    socket.on('offer', (data) => {
-        const targetRoom = activeRooms[socket.roomId];
-        if (targetRoom && targetRoom.viewerSocketId) {
-            io.to(targetRoom.viewerSocketId).emit('offer', data);
+    // WebRTC Offer from Host
+    socket.on('offer', (offer) => {
+        const roomId = getRoomIdBySocket(socket.id);
+        if (roomId && rooms[roomId] && rooms[roomId].viewerSocketId) {
+            io.to(rooms[roomId].viewerSocketId).emit('offer', offer);
+            console.log(`Offer relayed to viewer in room ${roomId}`);
         }
     });
 
-    socket.on('answer', (data) => {
-        const targetRoom = activeRooms[socket.roomId];
-        if (targetRoom && targetRoom.hostSocketId) {
-            io.to(targetRoom.hostSocketId).emit('answer', data);
+    // WebRTC Answer from Viewer
+    socket.on('answer', (answer) => {
+        const roomId = getRoomIdBySocket(socket.id);
+        if (roomId && rooms[roomId] && rooms[roomId].hostSocketId) {
+            io.to(rooms[roomId].hostSocketId).emit('answer', answer);
+            console.log(`Answer relayed to host in room ${roomId}`);
         }
     });
 
-    socket.on('ice-candidate', (data) => {
-        const targetRoom = activeRooms[socket.roomId];
-        if (!targetRoom) return;
+    // ICE Candidates
+    socket.on('ice-candidate', (candidate) => {
+        const roomId = getRoomIdBySocket(socket.id);
+        if (!roomId || !rooms[roomId]) return;
 
-        const targetSocketId = (socket.id === targetRoom.hostSocketId) 
-            ? targetRoom.viewerSocketId 
-            : targetRoom.hostSocketId;
-
-        if (targetSocketId) {
-            io.to(targetSocketId).emit('ice-candidate', data);
+        const room = rooms[roomId];
+        if (socket.id === room.hostSocketId && room.viewerSocketId) {
+            io.to(room.viewerSocketId).emit('ice-candidate', candidate);
+        } else if (socket.id === room.viewerSocketId && room.hostSocketId) {
+            io.to(room.hostSocketId).emit('ice-candidate', candidate);
         }
     });
 
-    // 4. Remote touch gestures
-    socket.on('remote-gesture', (data) => {
-        const targetRoom = activeRooms[socket.roomId];
-        if (targetRoom && targetRoom.hostSocketId) {
-            io.to(targetRoom.hostSocketId).emit('remote-gesture', data);
+    // Remote Gestures from Viewer to Host
+    socket.on('remote-gesture', (gestureData) => {
+        const roomId = getRoomIdBySocket(socket.id);
+        if (roomId && rooms[roomId] && rooms[roomId].hostSocketId) {
+            io.to(rooms[roomId].hostSocketId).emit('remote-gesture', gestureData);
         }
     });
 
-    // 5. Cleanup
     socket.on('disconnect', () => {
-        if (socket.roomId && activeRooms[socket.roomId]) {
-            if (activeRooms[socket.roomId].hostSocketId === socket.id) {
-                console.log(`[Host Terminated] Room closed: ${socket.roomId}`);
-                delete activeRooms[socket.roomId];
-            } else if (activeRooms[socket.roomId].viewerSocketId === socket.id) {
-                console.log(`[Viewer Disconnected] Room: ${socket.roomId}`);
-                activeRooms[socket.roomId].viewerSocketId = null;
+        console.log(`Client disconnected: ${socket.id}`);
+        for (const [roomId, room] of Object.entries(rooms)) {
+            if (room.hostSocketId === socket.id) {
+                console.log(`Host disconnected from room ${roomId}`);
+                if (room.viewerSocketId) {
+                    io.to(room.viewerSocketId).emit('host-disconnected');
+                }
+                delete rooms[roomId];
+            } else if (room.viewerSocketId === socket.id) {
+                console.log(`Viewer disconnected from room ${roomId}`);
+                room.viewerSocketId = null;
+                io.to(room.hostSocketId).emit('viewer-disconnected');
             }
         }
     });
 });
 
-const PORT = process.env.PORT || 10000;
+function getRoomIdBySocket(socketId) {
+    for (const [roomId, room] of Object.entries(rooms)) {
+        if (room.hostSocketId === socketId || room.viewerSocketId === socketId) {
+            return roomId;
+        }
+    }
+    return null;
+}
+
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`PhoneLink Signaling Server active on port ${PORT}`);
+    console.log(`Signaling server running on port ${PORT}`);
 });
